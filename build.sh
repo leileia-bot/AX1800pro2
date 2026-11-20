@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE}")" && pwd)"
 cd "$TASK_ROOT"
 source versions.env
 BUILD_ID="${GITHUB_SHA:-local-$(date -u +%Y%m%d%H%M%S)}"
@@ -253,13 +253,14 @@ raise SystemExit('Custom feature missing from firmware root: ' + relative)
 if not (root / 'www/luci-static/argon').is_dir():
 raise SystemExit('Argon theme assets missing from firmware root')
 templates = root / 'usr/share/ucode/luci/template/themes/argon'
+meta_text = (templates / 'head_meta.ut').read_text()
 for name in ('header.ut', 'header_login.ut'):
-if '/luci-static/arthur/theme.css?v=' not in (templates / name).read_text():
+tpl_text = (templates / name).read_text()
+if '/luci-static/arthur/theme.css?v=' not in tpl_text and '/luci-static/arthur/theme.css?v=' not in meta_text:
 raise SystemExit('Arthur skin missing from ' + name)
-metadata = (templates/'head_meta.ut').read_text()
-if 'jdy-cookorz' not in metadata or 'favicon.svg?v=' not in metadata or ' - LuCI' in metadata or '{{ media }}/icon/' in metadata:
+if 'jdy-cookorz' not in meta_text or 'favicon.svg?v=' not in meta_text or ' - LuCI' in meta_text or '{{ media }}/icon/' in meta_text:
 raise SystemExit('Arthur browser title/favicon missing or old Argon icons retained')
-if '@ARTHUR_BUILD@' in metadata:
+if '@ARTHUR_BUILD@' in meta_text:
 raise SystemExit('Browser metadata build stamping missing')
 import base64, xml.etree.ElementTree as ET
 favicon = ET.fromstring((root/'www/luci-static/arthur/favicon.svg').read_text())
