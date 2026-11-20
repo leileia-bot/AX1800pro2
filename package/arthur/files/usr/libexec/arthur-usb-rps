@@ -52,7 +52,7 @@ select_wired_policy() {
     [ "$(uci -q get arthur.performance.wired_rps)" != 0 ] || return
     enabled=true
     policy=waiting_proxy
-    [ "$(uci -q get openclash.config.enable)" = 1 ] || pidof clash clash_meta mihomo >/dev/null 2>&1 || return
+    [ "$(uci -q get openclash.config.enable)" = 1 ] || [ "$(uci -q get daed.config.enabled)" = 1 ] || [ "$(uci -q get honk.main.enabled)" = 1 ] || pidof clash clash_meta mihomo daed honk honk-core >/dev/null 2>&1 || return
     policy=global_steering
     case "$(uci -q get network.globals.packet_steering)" in ''|0) ;; *) return ;; esac
     policy=nss
