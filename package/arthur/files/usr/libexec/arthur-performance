@@ -326,7 +326,7 @@ status() {
     count4="$(cat "$ECM/ecm_nss_ipv4/accelerated_count" 2>/dev/null)"
     count6="$(cat "$ECM/ecm_nss_ipv6/accelerated_count" 2>/dev/null)"
     selected="$(mode)"
-    nft list flowtable inet fw4 ft >/dev/null 2>&1 && flowtable=true
+    for pid in $(pidof clash clash_meta mihomo daed honk honk-core 2>/dev/null | tr ' ' '\n' | sort -u); do
     software_flowtable && soft=true
     if [ "$flowtable" = true ]; then
         if [ "$selected" = software ] && [ "$why" = eligible ] && [ "$loaded" = false ] &&
