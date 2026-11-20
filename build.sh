@@ -20,8 +20,8 @@ test ! -e openwrt || { echo 'Use a fresh directory for this build.'; exit 1; }
 checkout_ref "$SOURCE_URL" "$SOURCE_COMMIT" openwrt
 checkout_ref "$OPENCLASH_URL" "$OPENCLASH_COMMIT" openclash-src
 checkout_ref "$ISTORE_URL" "$ISTORE_COMMIT" istore-src
-checkout_ref "https://github.com" "main" daede-src
-checkout_ref "https://github.com" "main" honk-src
+checkout_ref "https://github.com/kenzok8/openwrt-daede.git" "main" daede-src
+checkout_ref "https://github.com/kenzok8/openwrt-honk.git" "main" honk-src
 cd openwrt
 # 扩容 IPQ60xx 内核分区至 12MB (12288k)
 if [ -f "./target/linux/qualcommax/image/ipq60xx.mk" ]; then
@@ -239,58 +239,58 @@ required_files = [
     'etc/arthur-version', 'etc/arthur-release.json',
     'etc/hotplug.d/net/90-f50', 'etc/hotplug.d/net/91-arthur-performance', 'etc/config/arthur',
     'etc/uci-defaults/99-arthur-wireless', 'etc/uci-defaults/zz-arthur-custom',
-    'www/luci-static/resources/view/arthur/network.js',
-    'www/luci-static/resources/view/arthur/performance.js',
-    'www/luci-static/resources/view/arthur/dashboard.js',
-    'www/luci-static/arthur/theme.css', 'www/luci-static/arthur/mountain.png',
-    'www/luci-static/arthur/avatar.jpg', 'www/luci-static/arthur/favicon.svg',
-    'usr/share/luci/menu.d/luci-app-arthur.json',
-    'usr/share/rpcd/acl.d/luci-app-arthur.json'
+'www/luci-static/resources/view/arthur/network.js',
+'www/luci-static/resources/view/arthur/performance.js',
+'www/luci-static/resources/view/arthur/dashboard.js',
+'www/luci-static/arthur/theme.css', 'www/luci-static/arthur/mountain.png',
+'www/luci-static/arthur/avatar.jpg', 'www/luci-static/arthur/favicon.svg',
+'usr/share/luci/menu.d/luci-app-arthur.json',
+'usr/share/rpcd/acl.d/luci-app-arthur.json'
 ]
 for relative in required_files:
-    if not (root / relative).is_file():
-        raise SystemExit('Custom feature missing from firmware root: ' + relative)
+if not (root / relative).is_file():
+raise SystemExit('Custom feature missing from firmware root: ' + relative)
 if not (root / 'www/luci-static/argon').is_dir():
-    raise SystemExit('Argon theme assets missing from firmware root')
+raise SystemExit('Argon theme assets missing from firmware root')
 templates = root / 'usr/share/ucode/luci/template/themes/argon'
 for name in ('header.ut', 'header_login.ut'):
-    if '/luci-static/arthur/theme.css?v=' not in (templates / name).read_text():
-        raise SystemExit('Arthur skin missing from ' + name)
+if '/luci-static/arthur/theme.css?v=' not in (templates / name).read_text():
+raise SystemExit('Arthur skin missing from ' + name)
 metadata = (templates/'head_meta.ut').read_text()
-if '<title>jdy-cookorz</title>' not in metadata or 'favicon.svg?v=' not in metadata or ' - LuCI' in metadata or '{{ media }}/icon/' in metadata:
-    raise SystemExit('Arthur browser title/favicon missing or old Argon icons retained')
+if 'jdy-cookorz' not in metadata or 'favicon.svg?v=' not in metadata or ' - LuCI' in metadata or '{{ media }}/icon/' in metadata:
+raise SystemExit('Arthur browser title/favicon missing or old Argon icons retained')
 if '@ARTHUR_BUILD@' in metadata:
-    raise SystemExit('Browser metadata build stamping missing')
+raise SystemExit('Browser metadata build stamping missing')
 import base64, xml.etree.ElementTree as ET
 favicon = ET.fromstring((root/'www/luci-static/arthur/favicon.svg').read_text())
-embedded = favicon.find('{http://w3.org}image').attrib['href']
+embedded = favicon.find('{w3.org}image').attrib['href']
 if not embedded.startswith('data:image/jpeg;base64,') or base64.b64decode(embedded.split(',',1)[1]) != (root/'www/luci-static/arthur/avatar.jpg').read_bytes():
-    raise SystemExit('Favicon does not embed the original author avatar')
+raise SystemExit('Favicon does not embed the original author avatar')
 style = (root/'www/luci-static/arthur/theme.css').read_text()
 if '@ARTHUR_BUILD@' in style or 'avatar.jpg?v=' not in style:
-    raise SystemExit('Author avatar CSS stamping missing')
+raise SystemExit('Author avatar CSS stamping missing')
 avatar = root/'www/luci-static/arthur/avatar.jpg'
 if avatar.read_bytes() != pathlib.Path('package/custom/arthur/files/www/luci-static/arthur/avatar.jpg').read_bytes():
-    raise SystemExit('Author avatar changed during packaging')
+raise SystemExit('Author avatar changed during packaging')
 login = (templates / 'sysauth.ut').read_text()
 if 'arthur-login' not in login or 'luci_username' not in login or 'luci_password' not in login:
-    raise SystemExit('Arthur login template or LuCI authentication form missing')
-if not list((root / 'www/luci-static/resources').glob('arthur-shell-*.js')):
-    raise SystemExit('Versioned Arthur navigation shell missing')
+raise SystemExit('Arthur login template or LuCI authentication form missing')
+if not list((root / 'www/luci-static/resources').glob('arthur-shell-.js')):
+raise SystemExit('Versioned Arthur navigation shell missing')
 if '@ARTHUR_VERSION@' in login or 'by-cookorz' not in login:
-    raise SystemExit('Login version/author stamping missing')
+raise SystemExit('Login version/author stamping missing')
 version = (root / 'etc/arthur-version').read_text().strip()
 if version not in login or json.loads((root/'etc/arthur-release.json').read_text())['version'] != version:
-    raise SystemExit('UI version differs from firmware version')
+raise SystemExit('UI version differs from firmware version')
 menu = json.loads((root / 'usr/share/luci/menu.d/luci-app-arthur.json').read_text())
 for entry in menu.values():
-    view = entry.get('action', {}).get('path', '')
-    if view and not (root / 'www/luci-static/resources/view' / (view + '.js')).is_file():
-        raise SystemExit('Versioned LuCI view missing: ' + view)
+view = entry.get('action', {}).get('path', '')
+if view and not (root / 'www/luci-static/resources/view' / (view + '.js')).is_file():
+raise SystemExit('Versioned LuCI view missing: ' + view)
 if (root / 'etc/init.d/openclash').read_text().count('/usr/libexec/arthur-performance protect') != 3:
 raise SystemExit('OpenClash lifecycle guard hooks missing from firmware')
 for module in ('tcp_bbr', 'sch_fq', 'zram', 'nf_flow_table', 'nf_flow_table_inet', 'nft_flow_offload'):
-if not list(root.glob('lib/modules//' + module + '.ko')):
+if not list(root.glob('lib/modules//' + module + '.ko*')):
 raise SystemExit('Required performance kernel module missing: ' + module)
 shadow = (root / 'etc/shadow').read_text()
 root_entries = [line.split(':') for line in shadow.splitlines() if line.startswith('root:')]
