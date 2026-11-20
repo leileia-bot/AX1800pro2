@@ -37,19 +37,27 @@ def integrate(source, project, build_id):
     for name in ('header.ut', 'header_login.ut'):
         path = templates / name
         text = path.read_text(encoding='utf-8')
-        if text.count('</head>') != 1:
+        if '</head>' in text:
+            if text.count('</head>') != 1:
+                raise ValueError('Argon head anchor changed: ' + name)
+            text = text.replace('</head>', link + '</head>')
+        elif "head_meta" in text:
+            text = link + text
+        else:
             raise ValueError('Argon head anchor changed: ' + name)
         # Arthur owns the theme switch; avoid a second prefers-color-scheme sheet.
-        mode_anchor = "mode = cfg.get_first('argon', 'global', 'mode');"
-        if text.count(mode_anchor) != 1:
+        mode_pattern = r"mode\s*=\s*cfg\.get_first\(\s*['\"]argon['\"]\s*,\s*['\"]global['\"]\s*,\s*['\"]mode['\"]\s*\)\s*;"
+        if re.search(mode_pattern, text):
+            text = re.sub(mode_pattern, "mode = 'light';", text, count=1)
+        elif 'cfg.get_first' in text and 'mode' in text:
             raise ValueError('Argon mode anchor changed: ' + name)
-        text = text.replace(mode_anchor, "mode = 'light';")
-        path.write_text(text.replace('</head>', link + '</head>'), encoding='utf-8')
+        path.write_text(text, encoding='utf-8')
     path = templates / 'footer.ut'
     text = path.read_text(encoding='utf-8')
-    if text.count("L.require('menu-argon')") != 1:
+    menu_pattern = r"L\.require\(\s*['\"]menu-argon['\"]\s*\)"
+    if not re.search(menu_pattern, text):
         raise ValueError('Argon menu anchor changed')
-    text = text.replace("L.require('menu-argon')", f"L.require('menu-argon'); L.require('arthur-shell-{build_id}')")
+    text = re.sub(menu_pattern, f"L.require('menu-argon'); L.require('arthur-shell-{build_id}')", text, count=1)
     path.write_text(text, encoding='utf-8')
     login = (project / 'package/arthur/theme/sysauth.ut').read_text(encoding='utf-8')
     (templates / 'sysauth.ut').write_text(login.replace('@ARTHUR_VERSION@', version), encoding='utf-8')
@@ -60,4 +68,3 @@ def integrate(source, project, build_id):
 
 if __name__ == '__main__':
     integrate(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3])
-
