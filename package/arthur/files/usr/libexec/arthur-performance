@@ -14,8 +14,8 @@ number() {
 }
 
 proxy_active() {
-    [ "$(uci -q get openclash.config.enable)" = 1 ] && return 0
-    pidof clash clash_meta mihomo >/dev/null 2>&1
+[ "$(uci -q get openclash.config.enable)" = 1 ] || [ "$(uci -q get daed.config.enabled)" = 1 ] || [ "$(uci -q get honk.main.enabled)" = 1 ] && return 0
+pidof clash clash_meta mihomo daed honk honk-core >/dev/null 2>&1
 }
 
 qos_active() {
