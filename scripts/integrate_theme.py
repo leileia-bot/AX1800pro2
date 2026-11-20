@@ -41,7 +41,7 @@ def integrate(source, project, build_id):
             raise ValueError('Argon head anchor changed: ' + name)
         if '</head>' in text:
             text = text.replace('</head>', link + '</head>')
-        elif '<html' in text:
+        elif 'luci' not in text:
             raise ValueError('Argon head anchor changed: ' + name)
         # Arthur owns the theme switch; avoid a second prefers-color-scheme sheet.
         mode_pattern = r"mode\s*=\s*cfg\.get_first\(\s*['\"]argon['\"]\s*,\s*['\"]global['\"]\s*,\s*['\"]mode['\"]\s*\)\s*;"
