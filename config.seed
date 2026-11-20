@@ -28,7 +28,6 @@ CONFIG_PACKAGE_kmod-sched-core=y
 CONFIG_PACKAGE_kmod-sched-bpf=y
 CONFIG_PACKAGE_kmod-veth=y
 CONFIG_PACKAGE_kmod-xdp-sockets-diag=y
-CONFIG_PACKAGE_kmod-nft-queue=y
 
 # 核心三大代理：主力 daede + 新星 honk + 备用空壳 OpenClash
 CONFIG_PACKAGE_luci-app-daede=y
