@@ -24,7 +24,6 @@ kmod-sched-core
 kmod-sched-bpf
 kmod-veth
 kmod-xdp-sockets-diag
-kmod-nft-queue
 zram-swap
 kmod-zram
 kmod-usb-net-cdc-ether
