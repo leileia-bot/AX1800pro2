@@ -9,7 +9,6 @@ luci-app-store
 luci-compat
 luci-mod-network
 luci-theme-argon
-luci-app-argon-config
 luci-app-arthur
 jshn
 kmod-ath11k-ahb
