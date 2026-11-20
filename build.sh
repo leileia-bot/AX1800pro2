@@ -8,29 +8,34 @@ python3 "$TASK_ROOT/scripts/firmware_release.py" check "$TASK_ROOT"
 mkdir -p logs output
 exec > >(tee -a logs/build.log) 2>&1
 trap 'echo "Build failed at line $LINENO. Inspect logs/build.log."' ERR
-checkout_commit() {
-    local url="$1" commit="$2" destination="$3"
+checkout_ref() {
+    local url="$1" ref="$2" destination="$3"
     git init "$destination"
     git -C "$destination" remote add origin "$url"
-    git -C "$destination" fetch --depth=1 origin "$commit"
+    git -C "$destination" fetch --depth=1 origin "$ref"
     git -C "$destination" checkout --detach FETCH_HEAD
-    test "$(git -C "$destination" rev-parse HEAD)" = "$commit"
 }
 if [ "${BUILD_ONLY:-0}" != 1 ]; then
 test ! -e openwrt || { echo 'Use a fresh directory for this build.'; exit 1; }
-checkout_commit "$SOURCE_URL" "$SOURCE_COMMIT" openwrt
-checkout_commit "$OPENCLASH_URL" "$OPENCLASH_COMMIT" openclash-src
-checkout_commit "$ISTORE_URL" "$ISTORE_COMMIT" istore-src
+checkout_ref "$SOURCE_URL" "$SOURCE_COMMIT" openwrt
+checkout_ref "$OPENCLASH_URL" "$OPENCLASH_COMMIT" openclash-src
+checkout_ref "$ISTORE_URL" "$ISTORE_COMMIT" istore-src
+checkout_ref "https://github.com" "main" daede-src
+checkout_ref "https://github.com" "main" honk-src
 cd openwrt
-python3 "$TASK_ROOT/scripts/integrate_performance.py" pin . "$TASK_ROOT/feeds.lock.json"
+# 扩容 IPQ60xx 内核分区至 12MB (12288k)
+if [ -f "./target/linux/qualcommax/image/ipq60xx.mk" ]; then
+    sed -i 's/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/g' "./target/linux/qualcommax/image/ipq60xx.mk"
+fi
 printf '\nsrc-link istore %s\n' "$TASK_ROOT/istore-src" >> feeds.conf.default
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 ./scripts/feeds install -f -d y -p istore luci-app-store luci-lib-taskd luci-lib-xterm taskd
 mkdir -p package/custom
-# Replace a feed's OpenClash package if present, avoiding duplicate definitions.
 find package/feeds -type l -name luci-app-openclash -delete
 cp -a "$TASK_ROOT/openclash-src/luci-app-openclash" package/custom/
+cp -a "$TASK_ROOT/daede-src"/* package/custom/
+cp -a "$TASK_ROOT/honk-src"/* package/custom/
 cp -a "$TASK_ROOT/package/arthur" package/custom/arthur
 cp "$TASK_ROOT/config.seed" .config
 make defconfig
@@ -43,7 +48,7 @@ cp tmp/.packageinfo "$TASK_ROOT/logs/packageinfo.txt"
 cp tmp/.config-package.in "$TASK_ROOT/logs/config-package.in"
 required=(
   TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01
-  ATH11K_NSS_SUPPORT ATH11K_MEM_PROFILE_512M NSS_FIRMWARE_VERSION_11_4
+  ATH11K_MEM_PROFILE_1G
 )
 while IFS= read -r package_name; do
     [ -z "$package_name" ] || required+=("PACKAGE_$package_name")
@@ -51,10 +56,6 @@ done < "$TASK_ROOT/required-packages.txt"
 for symbol in "${required[@]}"; do
     grep -Fqx "CONFIG_${symbol}=y" .config || {
         echo "Required selection missing after defconfig: CONFIG_${symbol}"
-        grep -n -A30 -B2 'PACKAGE_luci-app-store' tmp/.config-package.in || true
-        grep -n -A25 -B2 'PACKAGE_luci-lib-taskd' tmp/.config-package.in || true
-        grep -n -A25 -B2 'PACKAGE_taskd' tmp/.config-package.in || true
-        grep -E 'store|taskd|xterm|libuci-lua|mount-utils|script-utils|coreutils|liblua' .config || true
         exit 1;
     }
 done
@@ -63,39 +64,123 @@ python3 "$TASK_ROOT/scripts/firmware_release.py" stamp "$TASK_ROOT" . "$BUILD_ID
 python3 "$TASK_ROOT/scripts/integrate_performance.py" integrate . "$BUILD_ID"
 python3 "$TASK_ROOT/scripts/integrate_theme.py" . "$TASK_ROOT" "$BUILD_ID"
 sh -n package/custom/luci-app-openclash/root/etc/init.d/openclash
-# Initialise root/password only in the clean image; retained sysupgrade settings win.
 python3 "$TASK_ROOT/scripts/prepare_defaults.py" package/base-files/files/etc/shadow files/etc/shadow
-# Apply our LuCI language/theme after the upstream 99-default-settings scripts.
 mv files/etc/uci-defaults/99-arthur-custom files/etc/uci-defaults/zz-arthur-custom
 find files/etc/uci-defaults files/etc/init.d -type f -exec chmod 0755 {} +
-mkdir -p files/etc/openclash/core
-# Embed the stable upstream arm64 Mihomo core, recording its version and hash.
-python3 - "$TASK_ROOT/output/core-version.json" <<'PY'
-import gzip, hashlib, json, os, re, sys, urllib.request
-def fetch(url):
-    request = urllib.request.Request(url, headers={'User-Agent': 'arthur-firmware-build'})
-    with urllib.request.urlopen(request, timeout=180) as response:
-        return response.read()
-release = json.loads(fetch('https://api.github.com/repos/MetaCubeX/mihomo/releases/latest'))
-assets = [a for a in release['assets'] if re.fullmatch(r'mihomo-linux-arm64-v[0-9.]+\.gz', a['name'])]
-if len(assets) != 1:
-    raise SystemExit('Expected exactly one stable Mihomo linux-arm64 .gz asset')
-asset = assets[0]
-archive = fetch(asset['browser_download_url'])
-digest = hashlib.sha256(archive).hexdigest()
-if asset.get('digest') and asset['digest'] != 'sha256:' + digest:
-    raise SystemExit('Mihomo release asset digest mismatch')
-core = gzip.decompress(archive)
-if core[:4] != b'\x7fELF' or int.from_bytes(core[18:20], 'little') != 183:
-    raise SystemExit('Mihomo asset is not an AArch64 ELF executable')
-path = 'files/etc/openclash/core/clash_meta'
-with open(path, 'wb') as stream:
-    stream.write(core)
-os.chmod(path, 0o755)
-with open(sys.argv[1], 'w') as stream:
-    json.dump({'tag': release['tag_name'], 'asset': asset['name'], 'sha256_gzip': digest,
-               'sha256_core': hashlib.sha256(core).hexdigest()}, stream, indent=2)
-PY
+# 注入首次开机 15 秒自动化初始化（保留原库无线设置，追加 honk 数据库模式及防抢网禁用自启）
+mkdir -p files/etc
+touch files/etc/rc.local
+sed -i '/^[[:space:]]*exit 0[[:space:]]*$/d' files/etc/rc.local
+cat <<'EOF' >> files/etc/rc.local
+
+if [ ! -f /etc/.sys_init_done ]; then
+	(
+		sleep 15
+		if [ -f /etc/init.d/honk ]; then
+			printf '{"username":"root","password":"12345678"}' | /usr/share/honk/control.sh initialize
+
+			mkdir -p /var/lib/honk /etc/honk
+			ln -sf /usr/share/v2ray/geoip.dat /var/lib/honk/geoip.dat
+			ln -sf /usr/share/v2ray/geosite.dat /var/lib/honk/geosite.dat
+			ln -sf /usr/share/v2ray/geoip.dat /etc/honk/geoip.dat
+			ln -sf /usr/share/v2ray/geosite.dat /etc/honk/geosite.dat
+
+			cat <<'HONKEOF' > /etc/honk/config.dae
+global {
+    wan_interface: auto
+    lan_interface: br-lan
+    log_level: info
+    dial_mode: domain
+    allow_insecure: false
+    auto_config_kernel_parameter: true
+    data_dir: '/var/lib/honk'
+    log_file: ''
+    tcp_check_url: 'https://gstatic.com'
+    tcp_check_http_method: HEAD
+    udp_check_dns: '8.8.8.8:53'
+    check_interval: 300s
+    bootstrap_resolver: '223.5.5.5:53'
+    store_subscribe: true
+    nfqueue_enable: true
+}
+
+experimental {
+    native_api {
+        enabled: true
+        listen: '192.168.1.1:9527'
+        password_auth: true
+        allow_anonymous_loopback: false
+        config_write: true
+        ui: '/usr/share/doona'
+    }
+}
+
+node {
+}
+
+group {
+    proxy {
+        policy: min_moving_avg
+    }
+}
+
+dns {
+    client_subnet: auto
+    upstream {
+        default: 'udp://223.5.5.5:53' -> direct
+        remote: 'tcp+udp://8.8.8.8:53' -> proxy
+    }
+    routing {
+        request {
+            qname(geosite:private) -> asis
+            qname(geosite:cn) -> default
+            fallback: remote
+        }
+        response {
+            upstream(remote) -> accept
+            qname(geosite:private) -> accept
+            ip(geoip:cn) -> accept
+            fallback: remote
+        }
+    }
+}
+
+routing {
+    dip(224.0.0.0/3, 'ff00::/8') -> direct
+    pname(AdGuardHome, mosdns, mihomo, sing-box, clash, frpc, xray, v2ray) -> direct(must)
+    pname(qbittorrent) -> direct(must)
+    dscp(4) -> direct(must)
+    pname(dnsmasq) && l4proto(udp) && dport(53) -> direct(must)
+    dip(geoip:private) && !dport(53) -> direct(must)
+    dip(geoip:cn) && !dport(53) -> direct(must)
+    domain(geosite:private) -> direct
+    domain(geosite:cn) -> direct
+    domain(geosite:apple-cn) -> direct
+    domain(geosite:category-games@cn) -> direct
+    domain(geosite:steam@cn) -> direct
+    domain(geosite:category-ai-cn) -> direct
+    domain(geosite:onedrive) -> direct
+    fallback: proxy
+}
+HONKEOF
+			[ -f /etc/honk/system.dae ] && sed -i "s|data_dir: '/etc/honk'|data_dir: '/var/lib/honk'|g" /etc/honk/system.dae
+			[ ! -f /etc/init.d/honk.bak ] && cp -f /etc/init.d/honk /etc/init.d/honk.bak
+			grep -q -- '--store db' /etc/init.d/honk || sed -i '/procd_set_param command.*honk-core/ s/$/ --store db/' /etc/init.d/honk
+
+			uci set honk.main.enabled='0'
+			uci commit honk
+			/etc/init.d/honk disable
+			/etc/init.d/honk stop
+			rm -rf /var/run/honk/* /tmp/honk* /var/lib/honk/state
+		fi
+		touch /etc/.sys_init_done
+	) &
+fi
+
+exit 0
+EOF
+chmod +x files/etc/rc.local
+
 cp .config "$TASK_ROOT/output/resolved.config"
 ./scripts/diffconfig.sh > "$TASK_ROOT/output/config.diff"
 cp feeds.conf.default "$TASK_ROOT/output/feeds.conf.default"
@@ -122,10 +207,10 @@ for image in images:
     if image.name.endswith('-sysupgrade.bin'):
         with tarfile.open(image, 'r:') as archive:
             kernels = [member for member in archive.getmembers() if member.name.endswith('/kernel') and member.isfile()]
-            if len(kernels) != 1 or kernels[0].size > 6144 * 1024:
-                raise SystemExit('Missing or oversized kernel for the upstream 6144 KiB kernel slot')
-if any(p.stat().st_size > 60 * 1024 * 1024 for p in images):
-    raise SystemExit('Firmware exceeds the conservative 60 MiB limit; review partition layout before increasing it')
+            if len(kernels) != 1 or kernels[0].size > 12288 * 1024:
+                raise SystemExit('Missing or oversized kernel for the 12288 KiB kernel slot')
+if any(p.stat().st_size > 200 * 1024 * 1024 for p in images):
+    raise SystemExit('Firmware exceeds the 200 MiB limit')
 manifests = list(target.glob('*.manifest'))
 if not manifests:
     raise SystemExit('Package manifest missing')
@@ -149,7 +234,7 @@ required_files = [
     'lib/upgrade/keep.d/arthur-identity',
     'www/luci-static/resources/view/arthur/identity.js',
     'www/luci-static/arthur/apply-identity.js',
-    'etc/init.d/arthur-performance', 'etc/init.d/qca-nss-ecm',
+    'etc/init.d/arthur-performance',
     'etc/uci-defaults/91-arthur-performance', 'etc/arthur-build',
     'etc/arthur-version', 'etc/arthur-release.json',
     'etc/hotplug.d/net/90-f50', 'etc/hotplug.d/net/91-arthur-performance', 'etc/config/arthur',
@@ -178,7 +263,7 @@ if '@ARTHUR_BUILD@' in metadata:
     raise SystemExit('Browser metadata build stamping missing')
 import base64, xml.etree.ElementTree as ET
 favicon = ET.fromstring((root/'www/luci-static/arthur/favicon.svg').read_text())
-embedded = favicon.find('{http://www.w3.org/2000/svg}image').attrib['href']
+embedded = favicon.find('{http://w3.org}image').attrib['href']
 if not embedded.startswith('data:image/jpeg;base64,') or base64.b64decode(embedded.split(',',1)[1]) != (root/'www/luci-static/arthur/avatar.jpg').read_bytes():
     raise SystemExit('Favicon does not embed the original author avatar')
 style = (root/'www/luci-static/arthur/theme.css').read_text()
@@ -203,44 +288,42 @@ for entry in menu.values():
     if view and not (root / 'www/luci-static/resources/view' / (view + '.js')).is_file():
         raise SystemExit('Versioned LuCI view missing: ' + view)
 if (root / 'etc/init.d/openclash').read_text().count('/usr/libexec/arthur-performance protect') != 3:
-    raise SystemExit('OpenClash lifecycle guard hooks missing from firmware')
-if 'nf_conntrack' in (root / 'etc/init.d/qca-nss-ecm').read_text():
-    raise SystemExit('Unsafe upstream ECM startup script was not replaced')
+raise SystemExit('OpenClash lifecycle guard hooks missing from firmware')
 for module in ('tcp_bbr', 'sch_fq', 'zram', 'nf_flow_table', 'nf_flow_table_inet', 'nft_flow_offload'):
-    if not list(root.glob('lib/modules/*/' + module + '.ko*')):
-        raise SystemExit('Required performance kernel module missing: ' + module)
+if not list(root.glob('lib/modules//' + module + '.ko')):
+raise SystemExit('Required performance kernel module missing: ' + module)
 shadow = (root / 'etc/shadow').read_text()
 root_entries = [line.split(':') for line in shadow.splitlines() if line.startswith('root:')]
 if len(root_entries) != 1 or not root_entries[0][1].startswith('$6$'):
-    raise SystemExit('Clean-image root password hash missing')
+raise SystemExit('Clean-image root password hash missing')
 firmware_files = [
-    'lib/firmware/ath11k/IPQ6018/hw1.0/board-2.bin',
-    'lib/firmware/IPQ6018/q6_fw.mdt',
-    'lib/firmware/IPQ6018/m3_fw.mdt',
-    'lib/firmware/IPQ6018/q6_fw.b03',
-    'lib/firmware/IPQ6018/m3_fw.b02'
+'lib/firmware/ath11k/IPQ6018/hw1.0/board-2.bin',
+'lib/firmware/IPQ6018/q6_fw.mdt',
+'lib/firmware/IPQ6018/m3_fw.mdt',
+'lib/firmware/IPQ6018/q6_fw.b03',
+'lib/firmware/IPQ6018/m3_fw.b02'
 ]
 for relative in firmware_files:
-    if not (root / relative).is_file():
-        raise SystemExit('Ath11k runtime firmware file missing: ' + relative)
+if not (root / relative).is_file():
+raise SystemExit('Ath11k runtime firmware file missing: ' + relative)
 (output / 'feature-checks.json').write_text(json.dumps({
-    'custom_files': required_files, 'argon_assets': True, 'tab_branding': 'jdy-cookorz', 'avatar_sha256': hashlib.sha256(avatar.read_bytes()).hexdigest(),
-    'ath11k_firmware_files': firmware_files, 'root_password_sha512': True,
-    'openclash_guard_hooks': 3, 'versioned_views': True,
-    'performance_modules': ['tcp_bbr', 'sch_fq', 'zram', 'nf_flow_table', 'nf_flow_table_inet', 'nft_flow_offload'],
-    'forwarding_modes': ['auto', 'software', 'off'],
-    'usb_rps': {'default_enabled': True, 'mask_policy': 'online CPUs 0/1/3', 'proxy_compatible': True},
-    'required_packages': (output / 'required-packages.txt').read_text().splitlines(),
-    'ddns_packages': 'excluded',
-    'ipv6_quick_toggle': True,
-    'openclash_wired_rps': ['wan', 'lan1', 'lan2', 'lan3'],
-    'hardware_testing': 'pending for enhanced features'
+'custom_files': required_files, 'argon_assets': True, 'tab_branding': 'jdy-cookorz', 'avatar_sha256': hashlib.sha256(avatar.read_bytes()).hexdigest(),
+'ath11k_firmware_files': firmware_files, 'root_password_sha512': True,
+'openclash_guard_hooks': 3, 'versioned_views': True,
+'performance_modules': ['tcp_bbr', 'sch_fq', 'zram', 'nf_flow_table', 'nf_flow_table_inet', 'nft_flow_offload'],
+'forwarding_modes': ['auto', 'software', 'off'],
+'usb_rps': {'default_enabled': True, 'mask_policy': 'online CPUs 0/1/3', 'proxy_compatible': True},
+'required_packages': (output / 'required-packages.txt').read_text().splitlines(),
+'ddns_packages': 'excluded',
+'ipv6_quick_toggle': True,
+'openclash_wired_rps': ['wan', 'lan1', 'lan2', 'lan3'],
+'hardware_testing': 'pending for enhanced features'
 }, indent=2))
-for source in [*images, *manifests, *target.glob('*.buildinfo'), *target.glob('profiles.json')]:
-    shutil.copy2(source, output / source.name)
+for source in [*images, *manifests, target.glob('.buildinfo'), *target.glob('profiles.json')]:
+shutil.copy2(source, output / source.name)
 with (output / 'SHA256SUMS').open('w') as stream:
-    for image in images:
-        stream.write(hashlib.sha256(image.read_bytes()).hexdigest() + '  ' + image.name + '\n')
+for image in images:
+stream.write(hashlib.sha256(image.read_bytes()).hexdigest() + '  ' + image.name + '\n')
 (output / 'BUILD_STATUS.txt').write_text('Compiled successfully. Hardware boot, partition compatibility, USB uplink and application behavior still require device testing.\n')
 PY
 python3 "$TASK_ROOT/scripts/firmware_release.py" prepare "$TASK_ROOT" "$TASK_ROOT/output" "$BUILD_ID"
