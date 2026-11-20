@@ -20,13 +20,13 @@ def integrate(source, project, build_id):
     style_dir.mkdir(parents=True, exist_ok=True)
     style = (project / 'package/arthur/files/www/luci-static/arthur/theme.css').read_text(encoding='utf-8')
     (style_dir / 'theme.css').write_text(style.replace('@ARTHUR_BUILD@', build_id), encoding='utf-8')
-    # Replace the shared metadata rather than competing with Argon's sized PNG icons.
+    # Replace the shared metadata and embed the Arthur skin directly so template refactors never break it.
     metadata = templates / 'head_meta.ut'
     original = metadata.read_text(encoding='utf-8')
     if original.count('<title>') != 1 or original.count(' - LuCI</title>') != 1:
         raise ValueError('Argon metadata title anchor changed')
     head = (project / 'package/arthur/theme/head_meta.ut').read_text(encoding='utf-8')
-    metadata.write_text(head.replace('@ARTHUR_BUILD@', build_id), encoding='utf-8')
+    metadata.write_text(head.replace('@ARTHUR_BUILD@', build_id) + '\n' + link, encoding='utf-8')
     avatar = (project / 'package/arthur/files/www/luci-static/arthur/avatar.jpg').read_bytes()
     encoded = base64.b64encode(avatar).decode('ascii')
     # An SVG wrapper embeds the original JPEG bytes, with no external image requests.
@@ -37,13 +37,11 @@ def integrate(source, project, build_id):
     for name in ('header.ut', 'header_login.ut'):
         path = templates / name
         text = path.read_text(encoding='utf-8')
+        if text.count('</head>') > 1:
+            raise ValueError('Argon head anchor changed: ' + name)
         if '</head>' in text:
-            if text.count('</head>') != 1:
-                raise ValueError('Argon head anchor changed: ' + name)
             text = text.replace('</head>', link + '</head>')
-        elif "head_meta" in text:
-            text = link + text
-        else:
+        elif '<html' in text:
             raise ValueError('Argon head anchor changed: ' + name)
         # Arthur owns the theme switch; avoid a second prefers-color-scheme sheet.
         mode_pattern = r"mode\s*=\s*cfg\.get_first\(\s*['\"]argon['\"]\s*,\s*['\"]global['\"]\s*,\s*['\"]mode['\"]\s*\)\s*;"
@@ -55,9 +53,12 @@ def integrate(source, project, build_id):
     path = templates / 'footer.ut'
     text = path.read_text(encoding='utf-8')
     menu_pattern = r"L\.require\(\s*['\"]menu-argon['\"]\s*\)"
-    if not re.search(menu_pattern, text):
+    if re.search(menu_pattern, text):
+        text = re.sub(menu_pattern, f"L.require('menu-argon'); L.require('arthur-shell-{build_id}')", text, count=1)
+    elif 'menu-argon' in text:
         raise ValueError('Argon menu anchor changed')
-    text = re.sub(menu_pattern, f"L.require('menu-argon'); L.require('arthur-shell-{build_id}')", text, count=1)
+    else:
+        text = text + f"\n<script>L.require('arthur-shell-{build_id}')</script>\n"
     path.write_text(text, encoding='utf-8')
     login = (project / 'package/arthur/theme/sysauth.ut').read_text(encoding='utf-8')
     (templates / 'sysauth.ut').write_text(login.replace('@ARTHUR_VERSION@', version), encoding='utf-8')
@@ -67,4 +68,5 @@ def integrate(source, project, build_id):
 
 
 if __name__ == '__main__':
-    integrate(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3])
+    src_dir, proj_dir, bid = sys.argv[1:]
+    integrate(pathlib.Path(src_dir), pathlib.Path(proj_dir), bid)
