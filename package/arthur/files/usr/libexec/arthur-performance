@@ -326,7 +326,7 @@ status() {
     count4="$(cat "$ECM/ecm_nss_ipv4/accelerated_count" 2>/dev/null)"
     count6="$(cat "$ECM/ecm_nss_ipv6/accelerated_count" 2>/dev/null)"
     selected="$(mode)"
-    for pid in $(pidof clash clash_meta mihomo daed honk honk-core 2>/dev/null | tr ' ' '\n' | sort -u); do
+    for pid in $(pidof clash clash_meta mihomo 2>/dev/null | tr ' ' '\n' | sort -u); do
     software_flowtable && soft=true
     if [ "$flowtable" = true ]; then
         if [ "$selected" = software ] && [ "$why" = eligible ] && [ "$loaded" = false ] &&
@@ -341,7 +341,7 @@ status() {
     zram_size="$(awk '$1 ~ /^\/dev\/zram/ {s+=$3} END {print s+0}' "$PROC/swaps" 2>/dev/null)"
     zram_used="$(awk '$1 ~ /^\/dev\/zram/ {s+=$4} END {print s+0}' "$PROC/swaps" 2>/dev/null)"
     [ "${zram_size:-0}" = 0 ] || zram=true
-    for pid in $(pidof clash clash_meta mihomo 2>/dev/null | tr ' ' '\n' | sort -u); do
+    for pid in $(pidof clash clash_meta mihomo daed honk honk-core 2>/dev/null | tr ' ' '\n' | sort -u); do
         case "$pid" in ''|*[!0-9]*) continue ;; esac
         current="$(awk '/^VmRSS:/ {print $2}' "$PROC/$pid/status" 2>/dev/null)"
         case "$current" in ''|*[!0-9]*) ;; *) rss=$((rss + current)) ;; esac
