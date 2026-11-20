@@ -20,8 +20,8 @@ test ! -e openwrt || { echo 'Use a fresh directory for this build.'; exit 1; }
 checkout_ref "$SOURCE_URL" "$SOURCE_COMMIT" openwrt
 checkout_ref "$OPENCLASH_URL" "$OPENCLASH_COMMIT" openclash-src
 checkout_ref "$ISTORE_URL" "$ISTORE_COMMIT" istore-src
-checkout_ref "https://github.com"/kenzok8/openwrt-daede.git"main" daede-src
-checkout_ref "https://github.com"/kenzok8/openwrt-honk.git"main" honk-src
+checkout_ref "https://github.com" "main" daede-src
+checkout_ref "https://github.com" "main" honk-src
 cd openwrt
 # 扩容 IPQ60xx 内核分区至 12MB (12288k)
 if [ -f "./target/linux/qualcommax/image/ipq60xx.mk" ]; then
