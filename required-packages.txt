@@ -1,4 +1,10 @@
 luci-app-openclash
+luci-app-daede
+dae
+daed
+luci-app-honk
+honk
+vmlinux-btf
 luci-app-store
 luci-compat
 luci-mod-network
@@ -15,11 +21,13 @@ ethtool-full
 kmod-tcp-bbr
 coreutils-timeout
 kmod-sched
+kmod-sched-core
+kmod-sched-bpf
+kmod-veth
+kmod-xdp-sockets-diag
+kmod-nft-queue
 zram-swap
 kmod-zram
-kmod-qca-nss-drv
-kmod-qca-nss-ecm
-nss-firmware-ipq60xx
 kmod-usb-net-cdc-ether
 kmod-usb-net-rndis
 kmod-usb-net-cdc-ncm
