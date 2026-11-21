@@ -61,12 +61,11 @@ jobs:
           EOF
           chmod 0755 pkg_root/etc/uci-defaults/95-arthur-skin-inject
 
-          # 3. 使用 Alpine/OpenWrt 原生 apk-tools 直接打包标准 APK 归档
+          # 3. 使用原生 apk-tools 直接打包标准 APK 归档
           docker run --rm -v "$PWD:/work" -w /work alpine:edge sh -c '
             apk add --no-cache apk-tools openssl
             openssl ecparam -name prime256v1 -genkey -noout -out private.pem
             openssl ec -in private.pem -pubout -out public.pem
-            INSTALLED_SIZE=$(du -sb pkg_root | cut -f1)
             apk mkpkg \
               --info "name:luci-theme-arthur-skin" \
               --info "version:1.0.0-r1" \
@@ -76,7 +75,6 @@ jobs:
               --info "origin:luci-theme-arthur-skin" \
               --info "url:localhost" \
               --info "maintainer:cookorz" \
-              --info "installed-size:${INSTALLED_SIZE}" \
               --files pkg_root \
               --script post-install:pkg_root/etc/uci-defaults/95-arthur-skin-inject \
               --sign private.pem \
