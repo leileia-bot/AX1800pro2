@@ -1,0 +1,129 @@
+name: Build Arthur Theme APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download ImmortalWrt SNAPSHOT SDK (qualcommax/ipq60xx)
+        run: |
+          set -e
+          IMM_HOST="downloads.immortalwrt.org"
+          OW_HOST="downloads.openwrt.org"
+          SDK_INDEX="https://${IMM_HOST}/snapshots/targets/qualcommax/ipq60xx/"
+          SDK_FILE=$(curl -fsSL "$SDK_INDEX" | grep -oE 'immortalwrt-sdk-[^"]+qualcommax-ipq60xx[^"]+\.tar\.(zst|xz)' | head -n 1)
+          if [ -z "$SDK_FILE" ]; then
+            SDK_INDEX="https://${OW_HOST}/snapshots/targets/qualcommax/ipq60xx/"
+            SDK_FILE=$(curl -fsSL "$SDK_INDEX" | grep -oE 'openwrt-sdk-[^"]+qualcommax-ipq60xx[^"]+\.tar\.(zst|xz)' | head -n 1)
+          fi
+          echo "Downloading ${SDK_INDEX}${SDK_FILE}..."
+          curl -fL "${SDK_INDEX}${SDK_FILE}" -o sdk.tar.archive
+          mkdir -p sdk
+          tar -xf sdk.tar.archive -C sdk --strip-components=1
+
+      - name: Assemble luci-theme-arthur-skin package
+        run: |
+          set -e
+          PKG_DIR="sdk/package/luci-theme-arthur-skin"
+          mkdir -p "$PKG_DIR/files/etc/uci-defaults"
+          mkdir -p "$PKG_DIR/files/www/luci-static/arthur"
+          mkdir -p "$PKG_DIR/files/www/luci-static/resources"
+
+          # 1. 提取雪山主题静态资源并替换占位符
+          cp -a package/arthur/files/www/luci-static/arthur/* "$PKG_DIR/files/www/luci-static/arthur/"
+          sed -i 's/@ARTHUR_BUILD@/1.0.0/g' "$PKG_DIR/files/www/luci-static/arthur/theme.css"
+
+          AVATAR_B64=$(base64 -w 0 "$PKG_DIR/files/www/luci-static/arthur/avatar.jpg")
+          SVG_NS="http://www.w3.org/2000/svg"
+          cat <<EOF > "$PKG_DIR/files/www/luci-static/arthur/favicon.svg"
+          <svg xmlns="${SVG_NS}" width="64" height="64" viewBox="0 0 64 64"><image width="64" height="64" preserveAspectRatio="xMidYMid meet" href="data:image/jpeg;base64,${AVATAR_B64}"/></svg>
+          EOF
+
+          cp -a package/arthur/files/www/luci-static/resources/arthur-shell.js "$PKG_DIR/files/www/luci-static/resources/"
+          sed -i 's/@ARTHUR_VERSION@/1.0.0/g' "$PKG_DIR/files/www/luci-static/resources/arthur-shell.js"
+
+          # 2. 生成适配 ImmortalWrt 6.18.60 的自动挂载脚本
+          cat <<'EOF' > "$PKG_DIR/files/etc/uci-defaults/95-arthur-skin-inject"
+          #!/bin/sh
+          TPL_DIR="/usr/share/ucode/luci/template/themes/argon"
+          SKIN_LINK='<script>try{document.documentElement.dataset.arthurTheme=localStorage.getItem("arthur-theme")==="dark"?"dark":"light"}catch(e){}</script><link rel="stylesheet" href="/luci-static/arthur/theme.css?v=1.0.0">'
+
+          [ -d "$TPL_DIR" ] || exit 0
+
+          if [ -f "$TPL_DIR/head_meta.ut" ] && ! grep -q "/luci-static/arthur/theme.css" "$TPL_DIR/head_meta.ut"; then
+              printf '\n%s\n' "$SKIN_LINK" >> "$TPL_DIR/head_meta.ut"
+          fi
+
+          for ut in header.ut header_login.ut; do
+              if [ -f "$TPL_DIR/$ut" ]; then
+                  sed -i "s/mode\s*=\s*cfg\.get_first([^;]*);/mode = 'light';/g" "$TPL_DIR/$ut"
+              fi
+          done
+
+          if [ -f "$TPL_DIR/footer.ut" ] && ! grep -q "arthur-shell" "$TPL_DIR/footer.ut"; then
+              sed -i "s/L\.require(['\"]menu-argon['\"])/L.require('menu-argon'); L.require('arthur-shell')/g" "$TPL_DIR/footer.ut"
+          fi
+
+          uci -q set luci.main.mediaurlbase='/luci-static/argon'
+          uci -q commit luci
+          rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache/*
+          exit 0
+          EOF
+          chmod 0755 "$PKG_DIR/files/etc/uci-defaults/95-arthur-skin-inject"
+
+          # 3. 生成包编译 Makefile
+          cat <<'EOF' > "$PKG_DIR/Makefile"
+          include $(TOPDIR)/rules.mk
+
+          PKG_NAME:=luci-theme-arthur-skin
+          PKG_VERSION:=1.0.0
+          PKG_RELEASE:=1
+          PKG_MAINTAINER:=cookorz
+          PKG_LICENSE:=Apache-2.0
+
+          include $(INCLUDE_DIR)/package.mk
+
+          define Package/luci-theme-arthur-skin
+            SECTION:=luci
+            CATEGORY:=LuCI
+            SUBMENU:=4. Themes
+            TITLE:=Arthur Snow Mountain Skin for ImmortalWrt Argon
+            PKGARCH:=all
+          endef
+
+          define Build/Compile
+          endef
+
+          define Package/luci-theme-arthur-skin/install
+          	$(CP) ./files/* $(1)/
+          	chmod 0755 $(1)/etc/uci-defaults/95-arthur-skin-inject
+          endef
+
+          define Package/luci-theme-arthur-skin/postinst
+          #!/bin/sh
+          [ -n "$${IPKG_INSTROOT}" ] || {
+          	/etc/uci-defaults/95-arthur-skin-inject
+          	rm -f /etc/uci-defaults/95-arthur-skin-inject
+          }
+          exit 0
+          EOF
+          printf 'endef\n\n$(eval $(call BuildPackage,luci-theme-arthur-skin))\n' >> "$PKG_DIR/Makefile"
+
+      - name: Compile Theme APK
+        run: |
+          cd sdk
+          make defconfig
+          make package/luci-theme-arthur-skin/compile V=s
+          mkdir -p ../dist
+          find bin/ -type f \( -name 'luci-theme-arthur-skin*.apk' -o -name 'luci-theme-arthur-skin*.ipk' \) -exec cp -v {} ../dist/ \;
+
+      - name: Upload Theme APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arthur-snow-mountain-theme-apk
+          path: dist/*
