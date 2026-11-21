@@ -40,6 +40,8 @@ cp -a "$TASK_ROOT/honk-src"/* package/custom/
 cp -a "$TASK_ROOT/package/arthur" package/custom/arthur
 cp "$TASK_ROOT/config.seed" .config
 make defconfig
+printf '\n# CONFIG_KERNEL_NF_CONNTRACK_DSCPREMARK_EXT is not set\n' >> .config
+make defconfig
 if grep -Eq '^CONFIG_PACKAGE_(luci-app-ddns|ddns-scripts[^=]*|luci-i18n-ddns-[^=]*)=[ym]$' .config; then
     echo 'DDNS was selected by another package; review dependencies before building.'
     exit 1
@@ -221,7 +223,7 @@ fi
 [ "${PREPARE_ONLY:-0}" != 1 ] || { echo 'Preparation and required-package checks completed.'; exit 0; }
 cd "$TASK_ROOT/openwrt"
 make download -j8
-yes "" | make -j"${BUILD_JOBS:-$(nproc)}" || yes "" | make -j1 V=s
+make -j"${BUILD_JOBS:-$(nproc)}" || make -j1 V=s
 python3 - "$TASK_ROOT/output" <<'PY'
 import base64, hashlib, json, pathlib, shutil, sys, tarfile, xml.etree.ElementTree as ET
 target = pathlib.Path('bin/targets/qualcommax/ipq60xx')
