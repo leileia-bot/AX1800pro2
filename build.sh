@@ -29,6 +29,21 @@ inject_outer_config() {
     fi
 }
 
+# ★ 剔除 Rust 主机编译器：当前所有选中包（daede/honk 为 Go，OpenClash 用预编译
+#   Mihomo 核心）均不依赖 Rust，而 host-compile 需下载完整 LLVM+rustc，在
+#   GitHub runner 上极易超时/失败，且拖慢约 30 分钟。
+strip_rust_feed() {
+    if [ "${ENABLE_RUST:-0}" = 1 ]; then
+        echo "Rust feed kept (ENABLE_RUST=1)."
+        return 0
+    fi
+    echo "Stripping feeds/packages/lang/rust to skip host rust compilation..."
+    rm -rf feeds/packages/lang/rust
+    rm -rf package/feeds/packages/rust
+    # 兜底：若 symlink 已被创建，一并清掉
+    find package/feeds -type l -name rust -delete 2>/dev/null || true
+}
+
 TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$TASK_ROOT"
 
@@ -50,6 +65,10 @@ trap 'echo "Build failed at line $LINENO. Inspect logs/build.log."' ERR
 # 拉取源码函数
 checkout_ref() {
     local url="$1" ref="$2" destination="$3"
+    if [ -e "$destination" ]; then
+        echo "WARNING: $destination already exists, removing for a clean build."
+        rm -rf "$destination"
+    fi
     git init "$destination"
     git -C "$destination" remote add origin "$url"
     git -C "$destination" fetch --depth=1 origin "$ref"
@@ -87,6 +106,10 @@ if [ "${BUILD_ONLY:-0}" != 1 ]; then
     # feeds
     printf '\nsrc-link istore %s\n' "$TASK_ROOT/istore-src" >> feeds.conf.default
     ./scripts/feeds update -a
+
+    # ★ 在生成索引前剔除 rust，使其不参与 host-compile
+    strip_rust_feed
+
     ./scripts/feeds install -a
     ./scripts/feeds install -f -d y -p istore luci-app-store luci-lib-taskd luci-lib-xterm taskd
 
@@ -101,6 +124,9 @@ if [ "${BUILD_ONLY:-0}" != 1 ]; then
     # 配置
     cp "$TASK_ROOT/config.seed" .config
     make defconfig
+
+    # ★ 双保险：defconfig 后若 rust 又被拉回，再剔一次（真有依赖会在此后 make 时报错暴露）
+    strip_rust_feed
 
     # ★ 关键修复: defconfig 之后再注入外层 .config (带 KERNEL_ 前缀, 防被覆盖)
     inject_outer_config
