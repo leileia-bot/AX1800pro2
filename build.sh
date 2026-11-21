@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE}")" && pwd)"
+TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$TASK_ROOT"
 source versions.env
 BUILD_ID="${GITHUB_SHA:-local-$(date -u +%Y%m%d%H%M%S)}"
@@ -197,7 +197,7 @@ cd "$TASK_ROOT/openwrt"
 make download -j8
 yes "" | make -j"${BUILD_JOBS:-$(nproc)}" || yes "" | make -j1 V=s
 python3 - "$TASK_ROOT/output" <<'PY'
-import hashlib, json, pathlib, shutil, sys, tarfile
+import base64, hashlib, json, pathlib, shutil, sys, tarfile, xml.etree.ElementTree as ET
 target = pathlib.Path('bin/targets/qualcommax/ipq60xx')
 output = pathlib.Path(sys.argv[1])
 images = sorted(p for p in target.glob('*jdcloud_re-ss-01*') if p.name.endswith(('-factory.bin', '-sysupgrade.bin')))
@@ -206,7 +206,7 @@ if not any(p.name.endswith('-factory.bin') for p in images) or not any(p.name.en
 for image in images:
     if image.name.endswith('-sysupgrade.bin'):
         with tarfile.open(image, 'r:') as archive:
-            kernels = [member for member in archive.getmembers() if member.name.endswith('/kernel') and member.isfile()]
+            kernels = [m for m in archive.getmembers() if m.name.endswith('/kernel') and m.isfile()]
             if len(kernels) != 1 or kernels[0].size > 12288 * 1024:
                 raise SystemExit('Missing or oversized kernel for the 12288 KiB kernel slot')
 if any(p.stat().st_size > 200 * 1024 * 1024 for p in images):
@@ -240,91 +240,90 @@ required_files = [
     'etc/hotplug.d/net/90-f50', 'etc/hotplug.d/net/91-arthur-performance', 'etc/config/arthur',
     'etc/uci-defaults/99-arthur-wireless', 'etc/uci-defaults/zz-arthur-custom',
     'www/luci-static/resources/view/arthur/network.js',
-'www/luci-static/resources/view/arthur/performance.js',
-'www/luci-static/resources/view/arthur/dashboard.js',
-'www/luci-static/arthur/theme.css', 'www/luci-static/arthur/mountain.png',
-'www/luci-static/arthur/avatar.jpg', 'www/luci-static/arthur/favicon.svg',
-'usr/share/luci/menu.d/luci-app-arthur.json',
-'usr/share/rpcd/acl.d/luci-app-arthur.json'
+    'www/luci-static/resources/view/arthur/performance.js',
+    'www/luci-static/resources/view/arthur/dashboard.js',
+    'www/luci-static/arthur/theme.css', 'www/luci-static/arthur/mountain.png',
+    'www/luci-static/arthur/avatar.jpg', 'www/luci-static/arthur/favicon.svg',
+    'usr/share/luci/menu.d/luci-app-arthur.json',
+    'usr/share/rpcd/acl.d/luci-app-arthur.json'
 ]
 for relative in required_files:
-if not (root / relative).is_file():
-raise SystemExit('Custom feature missing from firmware root: ' + relative)
+    if not (root / relative).is_file():
+        raise SystemExit('Custom feature missing from firmware root: ' + relative)
 if not (root / 'www/luci-static/argon').is_dir():
-raise SystemExit('Argon theme assets missing from firmware root')
+    raise SystemExit('Argon theme assets missing from firmware root')
 templates = root / 'usr/share/ucode/luci/template/themes/argon'
 meta_text = (templates / 'head_meta.ut').read_text()
 for name in ('header.ut', 'header_login.ut'):
-tpl_text = (templates / name).read_text()
-if '/luci-static/arthur/theme.css?v=' not in tpl_text and '/luci-static/arthur/theme.css?v=' not in meta_text:
-raise SystemExit('Arthur skin missing from ' + name)
-if 'jdy-cookorz' not in meta_text or 'favicon.svg?v=' not in meta_text or ' - LuCI' in meta_text or '{{ media }}/icon/' in meta_text:
-raise SystemExit('Arthur browser title/favicon missing or old Argon icons retained')
+    tpl_text = (templates / name).read_text()
+    if '/luci-static/arthur/theme.css?v=' not in tpl_text and '/luci-static/arthur/theme.css?v=' not in meta_text:
+        raise SystemExit('Arthur skin missing from ' + name)
+if '<title>jdy-cookorz</title>' not in meta_text or 'favicon.svg?v=' not in meta_text or ' - LuCI' in meta_text or '{{ media }}/icon/' in meta_text:
+    raise SystemExit('Arthur browser title/favicon missing or old Argon icons retained')
 if '@ARTHUR_BUILD@' in meta_text:
-raise SystemExit('Browser metadata build stamping missing')
-import base64, xml.etree.ElementTree as ET
-favicon = ET.fromstring((root/'www/luci-static/arthur/favicon.svg').read_text())
-embedded = favicon.find('{w3.org}image').attrib['href']
-if not embedded.startswith('data:image/jpeg;base64,') or base64.b64decode(embedded.split(',',1)[1]) != (root/'www/luci-static/arthur/avatar.jpg').read_bytes():
-raise SystemExit('Favicon does not embed the original author avatar')
-style = (root/'www/luci-static/arthur/theme.css').read_text()
+    raise SystemExit('Browser metadata build stamping missing')
+favicon = ET.fromstring((root / 'www/luci-static/arthur/favicon.svg').read_text())
+embedded = favicon.find('{http://www.w3.org/2000/svg}image').attrib['href']
+if not embedded.startswith('data:image/jpeg;base64,') or base64.b64decode(embedded.split(',', 1)[1]) != (root / 'www/luci-static/arthur/avatar.jpg').read_bytes():
+    raise SystemExit('Favicon does not embed the original author avatar')
+style = (root / 'www/luci-static/arthur/theme.css').read_text()
 if '@ARTHUR_BUILD@' in style or 'avatar.jpg?v=' not in style:
-raise SystemExit('Author avatar CSS stamping missing')
-avatar = root/'www/luci-static/arthur/avatar.jpg'
+    raise SystemExit('Author avatar CSS stamping missing')
+avatar = root / 'www/luci-static/arthur/avatar.jpg'
 if avatar.read_bytes() != pathlib.Path('package/custom/arthur/files/www/luci-static/arthur/avatar.jpg').read_bytes():
-raise SystemExit('Author avatar changed during packaging')
+    raise SystemExit('Author avatar changed during packaging')
 login = (templates / 'sysauth.ut').read_text()
 if 'arthur-login' not in login or 'luci_username' not in login or 'luci_password' not in login:
-raise SystemExit('Arthur login template or LuCI authentication form missing')
-if not list((root / 'www/luci-static/resources').glob('arthur-shell-.js')):
-raise SystemExit('Versioned Arthur navigation shell missing')
+    raise SystemExit('Arthur login template or LuCI authentication form missing')
+if not list((root / 'www/luci-static/resources').glob('arthur-shell-*.js')):
+    raise SystemExit('Versioned Arthur navigation shell missing')
 if '@ARTHUR_VERSION@' in login or 'by-cookorz' not in login:
-raise SystemExit('Login version/author stamping missing')
+    raise SystemExit('Login version/author stamping missing')
 version = (root / 'etc/arthur-version').read_text().strip()
-if version not in login or json.loads((root/'etc/arthur-release.json').read_text())['version'] != version:
-raise SystemExit('UI version differs from firmware version')
+if version not in login or json.loads((root / 'etc/arthur-release.json').read_text())['version'] != version:
+    raise SystemExit('UI version differs from firmware version')
 menu = json.loads((root / 'usr/share/luci/menu.d/luci-app-arthur.json').read_text())
 for entry in menu.values():
-view = entry.get('action', {}).get('path', '')
-if view and not (root / 'www/luci-static/resources/view' / (view + '.js')).is_file():
-raise SystemExit('Versioned LuCI view missing: ' + view)
+    view = entry.get('action', {}).get('path', '')
+    if view and not (root / 'www/luci-static/resources/view' / (view + '.js')).is_file():
+        raise SystemExit('Versioned LuCI view missing: ' + view)
 if (root / 'etc/init.d/openclash').read_text().count('/usr/libexec/arthur-performance protect') != 3:
-raise SystemExit('OpenClash lifecycle guard hooks missing from firmware')
+    raise SystemExit('OpenClash lifecycle guard hooks missing from firmware')
 for module in ('tcp_bbr', 'sch_fq', 'zram', 'nf_flow_table', 'nf_flow_table_inet', 'nft_flow_offload'):
-if not list(root.glob('lib/modules//' + module + '.ko*')):
-raise SystemExit('Required performance kernel module missing: ' + module)
+    if not list(root.glob('lib/modules/*/' + module + '.ko*')):
+        raise SystemExit('Required performance kernel module missing: ' + module)
 shadow = (root / 'etc/shadow').read_text()
 root_entries = [line.split(':') for line in shadow.splitlines() if line.startswith('root:')]
 if len(root_entries) != 1 or not root_entries[0][1].startswith('$6$'):
-raise SystemExit('Clean-image root password hash missing')
+    raise SystemExit('Clean-image root password hash missing')
 firmware_files = [
-'lib/firmware/ath11k/IPQ6018/hw1.0/board-2.bin',
-'lib/firmware/IPQ6018/q6_fw.mdt',
-'lib/firmware/IPQ6018/m3_fw.mdt',
-'lib/firmware/IPQ6018/q6_fw.b03',
-'lib/firmware/IPQ6018/m3_fw.b02'
+    'lib/firmware/ath11k/IPQ6018/hw1.0/board-2.bin',
+    'lib/firmware/IPQ6018/q6_fw.mdt',
+    'lib/firmware/IPQ6018/m3_fw.mdt',
+    'lib/firmware/IPQ6018/q6_fw.b03',
+    'lib/firmware/IPQ6018/m3_fw.b02'
 ]
 for relative in firmware_files:
-if not (root / relative).is_file():
-raise SystemExit('Ath11k runtime firmware file missing: ' + relative)
+    if not (root / relative).is_file():
+        raise SystemExit('Ath11k runtime firmware file missing: ' + relative)
 (output / 'feature-checks.json').write_text(json.dumps({
-'custom_files': required_files, 'argon_assets': True, 'tab_branding': 'jdy-cookorz', 'avatar_sha256': hashlib.sha256(avatar.read_bytes()).hexdigest(),
-'ath11k_firmware_files': firmware_files, 'root_password_sha512': True,
-'openclash_guard_hooks': 3, 'versioned_views': True,
-'performance_modules': ['tcp_bbr', 'sch_fq', 'zram', 'nf_flow_table', 'nf_flow_table_inet', 'nft_flow_offload'],
-'forwarding_modes': ['auto', 'software', 'off'],
-'usb_rps': {'default_enabled': True, 'mask_policy': 'online CPUs 0/1/3', 'proxy_compatible': True},
-'required_packages': (output / 'required-packages.txt').read_text().splitlines(),
-'ddns_packages': 'excluded',
-'ipv6_quick_toggle': True,
-'openclash_wired_rps': ['wan', 'lan1', 'lan2', 'lan3'],
-'hardware_testing': 'pending for enhanced features'
+    'custom_files': required_files, 'argon_assets': True, 'tab_branding': 'jdy-cookorz', 'avatar_sha256': hashlib.sha256(avatar.read_bytes()).hexdigest(),
+    'ath11k_firmware_files': firmware_files, 'root_password_sha512': True,
+    'openclash_guard_hooks': 3, 'versioned_views': True,
+    'performance_modules': ['tcp_bbr', 'sch_fq', 'zram', 'nf_flow_table', 'nf_flow_table_inet', 'nft_flow_offload'],
+    'forwarding_modes': ['auto', 'software', 'off'],
+    'usb_rps': {'default_enabled': True, 'mask_policy': 'online CPUs 0/1/3', 'proxy_compatible': True},
+    'required_packages': (output / 'required-packages.txt').read_text().splitlines(),
+    'ddns_packages': 'excluded',
+    'ipv6_quick_toggle': True,
+    'openclash_wired_rps': ['wan', 'lan1', 'lan2', 'lan3'],
+    'hardware_testing': 'pending for enhanced features'
 }, indent=2))
-for source in [*images, *manifests, target.glob('.buildinfo'), *target.glob('profiles.json')]:
-shutil.copy2(source, output / source.name)
+for source in [*images, *manifests, *target.glob('*.buildinfo'), *target.glob('profiles.json')]:
+    shutil.copy2(source, output / source.name)
 with (output / 'SHA256SUMS').open('w') as stream:
-for image in images:
-stream.write(hashlib.sha256(image.read_bytes()).hexdigest() + '  ' + image.name + '\n')
+    for image in images:
+        stream.write(hashlib.sha256(image.read_bytes()).hexdigest() + '  ' + image.name + '\n')
 (output / 'BUILD_STATUS.txt').write_text('Compiled successfully. Hardware boot, partition compatibility, USB uplink and application behavior still require device testing.\n')
 PY
 python3 "$TASK_ROOT/scripts/firmware_release.py" prepare "$TASK_ROOT" "$TASK_ROOT/output" "$BUILD_ID"
