@@ -195,7 +195,7 @@ fi
 [ "${PREPARE_ONLY:-0}" != 1 ] || { echo 'Preparation and required-package checks completed.'; exit 0; }
 cd "$TASK_ROOT/openwrt"
 make download -j8
-make -j"${BUILD_JOBS:-$(nproc)}" || make -j1 V=s
+yes "" | make -j"${BUILD_JOBS:-$(nproc)}" || yes "" | make -j1 V=s
 python3 - "$TASK_ROOT/output" <<'PY'
 import hashlib, json, pathlib, shutil, sys, tarfile
 target = pathlib.Path('bin/targets/qualcommax/ipq60xx')
@@ -239,7 +239,7 @@ required_files = [
     'etc/arthur-version', 'etc/arthur-release.json',
     'etc/hotplug.d/net/90-f50', 'etc/hotplug.d/net/91-arthur-performance', 'etc/config/arthur',
     'etc/uci-defaults/99-arthur-wireless', 'etc/uci-defaults/zz-arthur-custom',
-'www/luci-static/resources/view/arthur/network.js',
+    'www/luci-static/resources/view/arthur/network.js',
 'www/luci-static/resources/view/arthur/performance.js',
 'www/luci-static/resources/view/arthur/dashboard.js',
 'www/luci-static/arthur/theme.css', 'www/luci-static/arthur/mountain.png',
