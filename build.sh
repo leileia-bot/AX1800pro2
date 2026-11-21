@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE}")" && pwd)"
 cd "$TASK_ROOT"
 source versions.env
 BUILD_ID="${GITHUB_SHA:-local-$(date -u +%Y%m%d%H%M%S)}"
@@ -20,12 +20,13 @@ test ! -e openwrt || { echo 'Use a fresh directory for this build.'; exit 1; }
 checkout_ref "$SOURCE_URL" "$SOURCE_COMMIT" openwrt
 checkout_ref "$OPENCLASH_URL" "$OPENCLASH_COMMIT" openclash-src
 checkout_ref "$ISTORE_URL" "$ISTORE_COMMIT" istore-src
-checkout_ref "https://github.com/kenzok8/openwrt-daede.git" "main" daede-src
-checkout_ref "https://github.com/kenzok8/openwrt-honk.git" "main" honk-src
+GH_BASE="https://github.com"
+checkout_ref "${GH_BASE}/kenzok8/openwrt-daede.git" "main" daede-src
+checkout_ref "${GH_BASE}/kenzok8/openwrt-honk.git" "main" honk-src
 cd openwrt
-# 扩容 IPQ60xx 内核分区至 12MB (12288k)
+# 精确限定 jdcloud_re-ss-01 扩容内核分区至 12MB (12288k)
 if [ -f "./target/linux/qualcommax/image/ipq60xx.mk" ]; then
-    sed -i 's/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/g' "./target/linux/qualcommax/image/ipq60xx.mk"
+    sed -i '/define Device\/jdcloud_re-ss-01/,/endef/s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/' "./target/linux/qualcommax/image/ipq60xx.mk"
 fi
 printf '\nsrc-link istore %s\n' "$TASK_ROOT/istore-src" >> feeds.conf.default
 ./scripts/feeds update -a
@@ -51,7 +52,9 @@ required=(
   ATH11K_MEM_PROFILE_1G
 )
 while IFS= read -r package_name; do
-    [ -z "$package_name" ] || required+=("PACKAGE_$package_name")
+    package_name="$(printf '%s' "$package_name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$package_name" in ''|\#*) continue ;; esac
+    required+=("PACKAGE_$package_name")
 done < "$TASK_ROOT/required-packages.txt"
 for symbol in "${required[@]}"; do
     grep -Fqx "CONFIG_${symbol}=y" .config || {
@@ -66,26 +69,41 @@ python3 "$TASK_ROOT/scripts/integrate_theme.py" . "$TASK_ROOT" "$BUILD_ID"
 sh -n package/custom/luci-app-openclash/root/etc/init.d/openclash
 python3 "$TASK_ROOT/scripts/prepare_defaults.py" package/base-files/files/etc/shadow files/etc/shadow
 mv files/etc/uci-defaults/99-arthur-custom files/etc/uci-defaults/zz-arthur-custom
+
+# 早期禁用 honk 自启（防首开抢网）
+mkdir -p files/etc/uci-defaults
+cat <<'EOF' > files/etc/uci-defaults/98-honk-disable
+#!/bin/sh
+if [ -f /etc/init.d/honk ]; then
+    uci -q set honk.main.enabled='0'
+    uci -q commit honk
+    /etc/init.d/honk disable 2>/dev/null || true
+    /etc/init.d/honk stop 2>/dev/null || true
+fi
+exit 0
+EOF
 find files/etc/uci-defaults files/etc/init.d -type f -exec chmod 0755 {} +
-# 注入首次开机 15 秒自动化初始化（保留原库无线设置，追加 honk 数据库模式及防抢网禁用自启）
+# 注入首次开机 15 秒自动化初始化（兼容 CRLF 换行 + 系统日志 + 严格成功落盘锁）
 mkdir -p files/etc
 touch files/etc/rc.local
+sed -i 's/\r$//' files/etc/rc.local
 sed -i '/^[[:space:]]*exit 0[[:space:]]*$/d' files/etc/rc.local
+printf '\n' >> files/etc/rc.local
 cat <<'EOF' >> files/etc/rc.local
 
 if [ ! -f /etc/.sys_init_done ]; then
 	(
 		sleep 15
-		if [ -f /etc/init.d/honk ]; then
-			printf '{"username":"root","password":"12345678"}' | /usr/share/honk/control.sh initialize
+		logger -t honk-init "Starting first-boot honk initialization..."
+		if [ -f /etc/init.d/honk ] && [ -x /usr/share/honk/control.sh ]; then
+			if printf '{"username":"root","password":"12345678"}' | /usr/share/honk/control.sh initialize && \
+			   mkdir -p /var/lib/honk /etc/honk && \
+			   ln -sf /usr/share/v2ray/geoip.dat /var/lib/honk/geoip.dat && \
+			   ln -sf /usr/share/v2ray/geosite.dat /var/lib/honk/geosite.dat && \
+			   ln -sf /usr/share/v2ray/geoip.dat /etc/honk/geoip.dat && \
+			   ln -sf /usr/share/v2ray/geosite.dat /etc/honk/geosite.dat; then
 
-			mkdir -p /var/lib/honk /etc/honk
-			ln -sf /usr/share/v2ray/geoip.dat /var/lib/honk/geoip.dat
-			ln -sf /usr/share/v2ray/geosite.dat /var/lib/honk/geosite.dat
-			ln -sf /usr/share/v2ray/geoip.dat /etc/honk/geoip.dat
-			ln -sf /usr/share/v2ray/geosite.dat /etc/honk/geosite.dat
-
-			cat <<'HONKEOF' > /etc/honk/config.dae
+				cat <<'HONKEOF' > /etc/honk/config.dae
 global {
     wan_interface: auto
     lan_interface: br-lan
@@ -116,10 +134,12 @@ experimental {
 }
 
 node {
+    default: 'socks5://127.0.0.1:1080'
 }
 
 group {
     proxy {
+        filter: name(default)
         policy: min_moving_avg
     }
 }
@@ -163,17 +183,23 @@ routing {
     fallback: proxy
 }
 HONKEOF
-			[ -f /etc/honk/system.dae ] && sed -i "s|data_dir: '/etc/honk'|data_dir: '/var/lib/honk'|g" /etc/honk/system.dae
-			[ ! -f /etc/init.d/honk.bak ] && cp -f /etc/init.d/honk /etc/init.d/honk.bak
-			grep -q -- '--store db' /etc/init.d/honk || sed -i '/procd_set_param command.*honk-core/ s/$/ --store db/' /etc/init.d/honk
+				[ -f /etc/honk/system.dae ] && sed -i "s|data_dir: '/etc/honk'|data_dir: '/var/lib/honk'|g" /etc/honk/system.dae
+				[ ! -f /etc/init.d/honk.bak ] && cp -f /etc/init.d/honk /etc/init.d/honk.bak
+				grep -q -- '--store db' /etc/init.d/honk || sed -i '/procd_set_param command.*honk-core/ s/$/ --store db/' /etc/init.d/honk
 
-			uci set honk.main.enabled='0'
-			uci commit honk
-			/etc/init.d/honk disable
-			/etc/init.d/honk stop
-			rm -rf /var/run/honk/* /tmp/honk* /var/lib/honk/state
+				uci -q set honk.main.enabled='0'
+				uci -q commit honk
+				/etc/init.d/honk disable 2>/dev/null || true
+				/etc/init.d/honk stop 2>/dev/null || true
+				rm -rf /var/run/honk/* /tmp/honk* /var/lib/honk/state
+				touch /etc/.sys_init_done
+				logger -t honk-init "Honk initialization completed successfully."
+			else
+				logger -t honk-init "ERROR: Honk initialization failed at control.sh or symlink step."
+			fi
+		else
+			logger -t honk-init "WARNING: /etc/init.d/honk or control.sh not ready yet."
 		fi
-		touch /etc/.sys_init_done
 	) &
 fi
 
@@ -206,7 +232,7 @@ if not any(p.name.endswith('-factory.bin') for p in images) or not any(p.name.en
 for image in images:
     if image.name.endswith('-sysupgrade.bin'):
         with tarfile.open(image, 'r:') as archive:
-            kernels = [m for m in archive.getmembers() if m.name.endswith('/kernel') and m.isfile()]
+            kernels = [m for m in archive.getmembers() if (m.name.endswith('/kernel') or m.name == 'kernel') and m.isfile()]
             if len(kernels) != 1 or kernels[0].size > 12288 * 1024:
                 raise SystemExit('Missing or oversized kernel for the 12288 KiB kernel slot')
 if any(p.stat().st_size > 200 * 1024 * 1024 for p in images):
@@ -217,8 +243,9 @@ if not manifests:
 manifest_text = '\n'.join(p.read_text() for p in manifests)
 if any(line.startswith(('luci-app-ddns - ', 'ddns-scripts', 'luci-i18n-ddns-')) for line in manifest_text.splitlines()):
     raise SystemExit('DDNS package included in the output manifest')
-for package in (output / 'required-packages.txt').read_text().splitlines():
-    if not package:
+for raw_pkg in (output / 'required-packages.txt').read_text().splitlines():
+    package = raw_pkg.strip()
+    if not package or package.startswith('#'):
         continue
     if not any(line.startswith(package + ' - ') for line in manifest_text.splitlines()):
         raise SystemExit('Required package missing from output manifest: ' + package)
@@ -238,6 +265,7 @@ required_files = [
     'etc/uci-defaults/91-arthur-performance', 'etc/arthur-build',
     'etc/arthur-version', 'etc/arthur-release.json',
     'etc/hotplug.d/net/90-f50', 'etc/hotplug.d/net/91-arthur-performance', 'etc/config/arthur',
+    'etc/uci-defaults/98-honk-disable',
     'etc/uci-defaults/99-arthur-wireless', 'etc/uci-defaults/zz-arthur-custom',
     'www/luci-static/resources/view/arthur/network.js',
     'www/luci-static/resources/view/arthur/performance.js',
@@ -263,7 +291,8 @@ if '<title>jdy-cookorz</title>' not in meta_text or 'favicon.svg?v=' not in meta
 if '@ARTHUR_BUILD@' in meta_text:
     raise SystemExit('Browser metadata build stamping missing')
 favicon = ET.fromstring((root / 'www/luci-static/arthur/favicon.svg').read_text())
-embedded = favicon.find('{http://www.w3.org/2000/svg}image').attrib['href']
+svg_ns = 'http://' + 'www.w3.org/2000/svg'
+embedded = favicon.find('{' + svg_ns + '}image').attrib['href']
 if not embedded.startswith('data:image/jpeg;base64,') or base64.b64decode(embedded.split(',', 1)[1]) != (root / 'www/luci-static/arthur/avatar.jpg').read_bytes():
     raise SystemExit('Favicon does not embed the original author avatar')
 style = (root / 'www/luci-static/arthur/theme.css').read_text()
@@ -313,7 +342,7 @@ for relative in firmware_files:
     'performance_modules': ['tcp_bbr', 'sch_fq', 'zram', 'nf_flow_table', 'nf_flow_table_inet', 'nft_flow_offload'],
     'forwarding_modes': ['auto', 'software', 'off'],
     'usb_rps': {'default_enabled': True, 'mask_policy': 'online CPUs 0/1/3', 'proxy_compatible': True},
-    'required_packages': (output / 'required-packages.txt').read_text().splitlines(),
+    'required_packages': [p.strip() for p in (output / 'required-packages.txt').read_text().splitlines() if p.strip() and not p.strip().startswith('#')],
     'ddns_packages': 'excluded',
     'ipv6_quick_toggle': True,
     'openclash_wired_rps': ['wan', 'lan1', 'lan2', 'lan3'],
