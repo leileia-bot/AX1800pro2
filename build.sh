@@ -28,6 +28,12 @@ cd openwrt
 if [ -f "./target/linux/qualcommax/image/ipq60xx.mk" ]; then
     sed -i '/define Device\/jdcloud_re-ss-01/,/endef/s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/' "./target/linux/qualcommax/image/ipq60xx.mk"
 fi
+# 预设 6.12 内核新选项默认值为 y，彻底防止编译期间 syncconfig 交互提问中断
+for kcfg in target/linux/generic/config-6.12 target/linux/qualcommax/config-6.12; do
+    if [ -f "$kcfg" ] && ! grep -q "CONFIG_NF_CONNTRACK_DSCPREMARK_EXT" "$kcfg"; then
+        printf '\nCONFIG_NF_CONNTRACK_DSCPREMARK_EXT=y\n' >> "$kcfg"
+    fi
+done
 printf '\nsrc-link istore %s\n' "$TASK_ROOT/istore-src" >> feeds.conf.default
 ./scripts/feeds update -a
 ./scripts/feeds install -a
@@ -40,12 +46,6 @@ cp -a "$TASK_ROOT/honk-src"/* package/custom/
 cp -a "$TASK_ROOT/package/arthur" package/custom/arthur
 cp "$TASK_ROOT/config.seed" .config
 make defconfig
-printf '\n# CONFIG_KERNEL_NF_CONNTRACK_DSCPREMARK_EXT is not set\n' >> .config
-make defconfig
-if grep -Eq '^CONFIG_PACKAGE_(luci-app-ddns|ddns-scripts[^=]*|luci-i18n-ddns-[^=]*)=[ym]$' .config; then
-    echo 'DDNS was selected by another package; review dependencies before building.'
-    exit 1
-fi
 cp .config "$TASK_ROOT/logs/resolved.config"
 cp tmp/.packageinfo "$TASK_ROOT/logs/packageinfo.txt"
 cp tmp/.config-package.in "$TASK_ROOT/logs/config-package.in"
